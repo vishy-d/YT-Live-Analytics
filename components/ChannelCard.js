@@ -1,74 +1,149 @@
 import { useState } from 'react'
 
+const fmtExact = n => Number(n||0).toLocaleString('en-IN')
+
 export default function ChannelCard({ ch, index, onStart, onStop, onRemove, onRefresh }) {
   const [expanded, setExpanded] = useState(false)
-
-  const viewers = ch.viewers || 0
-  const streams = ch.streams || []
-
-  function fmtNum(n) {
-    if (n >= 1e6) return (n/1e6).toFixed(1)+'M'
-    if (n >= 1e3) return (n/1e3).toFixed(0)+'K'
-    return n.toLocaleString()
-  }
-
-  const logLines = ch.log || []
+  const viewers  = ch.viewers  || 0
+  const streams  = ch.streams  || []
+  const logLines = ch.log      || []
 
   return (
-    <div className={`ch-card ${ch.capturing ? 'capturing' : ''} animate-slide-up`}
-         style={{animationDelay:`${index*40}ms`}}>
+    <div
+      className={`ch-card ${ch.capturing?'capturing':''}`}
+      style={{animationDelay:`${index*50}ms`, width:296}}
+    >
+      {/* Top accent bar handled by CSS .ch-card::after */}
 
-      {/* Top bar */}
-      <div className="flex items-start justify-between mb-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-0.5">
-            {ch.capturing && <span className="live-dot" style={{width:7,height:7,flexShrink:0}}/>}
-            <h4 className="font-display font-bold text-white text-sm truncate">{ch.channelName}</h4>
+      {/* Header row */}
+      <div style={{display:'flex', alignItems:'flex-start', justifyContent:'space-between', marginBottom:12}}>
+        <div style={{flex:1, minWidth:0}}>
+          <div style={{display:'flex', alignItems:'center', gap:7, marginBottom:6}}>
+            {ch.capturing && (
+              <div className="live-ring" style={{flexShrink:0}}>
+                <span className="live-dot" style={{width:6, height:6}}/>
+              </div>
+            )}
+            <h4 style={{
+              fontFamily:"'IBM Plex Sans',sans-serif",
+              fontWeight:600, fontSize:14, color:'var(--text1)',
+              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+              margin:0, letterSpacing:'-0.01em',
+            }}>{ch.channelName}</h4>
           </div>
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="badge badge-violet" style={{fontSize:10}}>{ch.language}</span>
-            <span className="badge badge-cyan" style={{fontSize:10}}>{ch.colName}</span>
+          <div style={{display:'flex', flexWrap:'wrap', gap:4, marginBottom:5}}>
+            <span className="badge badge-violet" style={{fontSize:9}}>{ch.language}</span>
+            <span className="badge badge-blue"   style={{fontSize:9}}>{ch.colName}</span>
           </div>
-          <div className="font-mono mt-1" style={{color:'#1e3a5f',fontSize:10}}>{ch.channelId}</div>
+          <div style={{fontFamily:"'IBM Plex Mono',monospace", fontSize:10, color:'var(--text3)', letterSpacing:'.02em'}}>{ch.channelId}</div>
         </div>
-        <button className="btn btn-xs ml-2 flex-shrink-0"
-                style={{background:'rgba(255,45,85,0.08)',border:'1px solid rgba(255,45,85,0.15)',color:'#4a4060'}}
-                onClick={() => onRemove(ch.firestoreId)} title="Remove channel">✕</button>
+        <button
+          onClick={() => onRemove(ch.firestoreId)}
+          title="Remove channel"
+          style={{
+            marginLeft:10, flexShrink:0,
+            background:'transparent', border:'1px solid var(--border)',
+            color:'var(--text3)', borderRadius:5, padding:'3px 7px',
+            cursor:'pointer', fontSize:11, fontWeight:600,
+            transition:'all .15s',
+          }}
+          onMouseEnter={e=>{e.currentTarget.style.borderColor='rgba(255,69,58,.4)';e.currentTarget.style.color='var(--red)'}}
+          onMouseLeave={e=>{e.currentTarget.style.borderColor='var(--border)';e.currentTarget.style.color='var(--text4)'}}
+        >✕</button>
       </div>
 
-      {/* Viewer count */}
-      <div className="my-3 text-center py-3 rounded-xl relative overflow-hidden"
-           style={{background:'rgba(3,10,26,0.5)',border:'1px solid rgba(0,212,255,0.07)'}}>
-        <div className={`big-num text-5xl ${ch.capturing ? 'neon-cyan' : ''}`}
-             style={!ch.capturing ? {color:'#1e3a5f'} : {}}>
-          {fmtNum(viewers)}
+      {/* Viewer count display */}
+      <div style={{
+        textAlign:'center', padding:'14px 10px',
+        borderRadius:6,
+        background:'var(--bg)',
+        border:'1px solid var(--border)',
+        margin:'0 0 12px',
+        position:'relative', overflow:'hidden',
+      }}>
+        <div
+          className="num-in"
+          key={viewers}
+          style={{
+            fontFamily:"'IBM Plex Mono',monospace",
+            fontWeight:600,
+            letterSpacing:'-0.03em',
+            lineHeight:1.05,
+            fontSize: viewers>9999999?26 : viewers>999999?32 : viewers>99999?36 : 42,
+            color: ch.capturing ? 'var(--blue2)' : 'var(--text3)',
+            transition:'color .4s',
+          }}
+        >
+          {fmtExact(viewers)}
         </div>
-        <div className="text-xs mt-1" style={{color:'#2a4a6a'}}>
-          {streams.length} stream{streams.length!==1?'s':''} · {ch.capturing ? 'capturing every 60s' : 'idle'}
+        <div style={{
+          fontSize:11, fontWeight:500,
+          color:'var(--text3)', marginTop:5,
+          fontFamily:"'IBM Plex Sans',sans-serif",
+          display:'flex', alignItems:'center', justifyContent:'center', gap:8,
+        }}>
+          <span>{streams.length} stream{streams.length!==1?'s':''} live</span>
+          {ch.capturing && (
+            <span style={{display:'flex', alignItems:'center', gap:4, color:'var(--green)'}}>
+              <span style={{width:5, height:5, borderRadius:'50%', background:'var(--green)', display:'inline-block'}}/>
+              capturing
+            </span>
+          )}
         </div>
-        {/* Progress glow bar */}
+        {/* Bottom shimmer bar when capturing */}
         {ch.capturing && (
-          <div className="absolute bottom-0 left-0 right-0 h-0.5"
-               style={{background:'linear-gradient(90deg,transparent,rgba(0,212,255,0.5),transparent)'}}/>
+          <div style={{
+            position:'absolute', bottom:0, left:0, right:0, height:2,
+            background:'linear-gradient(90deg,transparent,var(--green),transparent)',
+            animation:'shimmerPass 2.2s linear infinite',
+            backgroundSize:'200% 100%',
+          }}/>
         )}
       </div>
 
       {/* Stream list */}
       {streams.length > 0 && (
-        <div className="mb-3">
-          <button className="text-xs mb-1.5 flex items-center gap-1"
-                  style={{color:'#2a6080',background:'none',border:'none',cursor:'pointer',padding:0}}
-                  onClick={() => setExpanded(p => !p)}>
-            {expanded ? '▾' : '▸'} {streams.length} live stream{streams.length>1?'s':''}
+        <div style={{marginBottom:12}}>
+          <button
+            onClick={() => setExpanded(p=>!p)}
+            style={{
+              fontWeight:500, fontSize:11, color:'var(--text3)',
+              background:'none', border:'none', cursor:'pointer',
+              padding:'0 0 6px', display:'flex', alignItems:'center', gap:5,
+              fontFamily:"'IBM Plex Sans',sans-serif",
+              transition:'color .15s',
+            }}
+            onMouseEnter={e=>e.currentTarget.style.color='var(--text1)'}
+            onMouseLeave={e=>e.currentTarget.style.color='var(--text3)'}
+          >
+            <span style={{
+              display:'inline-block',
+              transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)',
+              transition:'transform .18s',
+              fontSize:10,
+            }}>▶</span>
+            {streams.length} active stream{streams.length>1?'s':''}
           </button>
           {expanded && (
-            <div className="space-y-1">
+            <div className="animate-fade-in" style={{display:'flex', flexDirection:'column', gap:4}}>
               {streams.map(s => (
-                <div key={s.id} className="flex items-center justify-between rounded-lg px-2 py-1.5"
-                     style={{background:'rgba(0,212,255,0.03)',border:'1px solid rgba(0,212,255,0.06)'}}>
-                  <span className="text-xs truncate mr-2" style={{color:'#4a6080',maxWidth:160}}
-                        title={s.title}>{s.title}</span>
-                  <span className="font-mono text-xs font-medium flex-shrink-0" style={{color:'#00d4ff'}}>{fmtNum(s.views||0)}</span>
+                <div key={s.id} style={{
+                  display:'flex', alignItems:'center', justifyContent:'space-between',
+                  padding:'6px 10px', borderRadius:5,
+                  background:'var(--bg3)', border:'1px solid var(--border)',
+                }}>
+                  <div style={{display:'flex', alignItems:'center', gap:6, minWidth:0}}>
+                    <span className="live-dot" style={{width:4, height:4, flexShrink:0}}/>
+                    <span style={{
+                      fontSize:11, fontWeight:400, color:'var(--text2)',
+                      overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:155,
+                    }}>{s.title}</span>
+                  </div>
+                  <span style={{
+                    fontFamily:"'IBM Plex Mono',monospace",
+                    fontSize:11, fontWeight:600,
+                    flexShrink:0, marginLeft:8, color:'var(--blue2)',
+                  }}>{fmtExact(s.views||0)}</span>
                 </div>
               ))}
             </div>
@@ -77,28 +152,29 @@ export default function ChannelCard({ ch, index, onStart, onStop, onRemove, onRe
       )}
 
       {/* Controls */}
-      <div className="flex gap-2 mb-3">
-        {ch.capturing ? (
-          <button className="btn btn-ghost btn-sm flex-1 justify-center" onClick={() => onStop(ch.channelId)}>
-            <span style={{color:'#ff2d55'}}>■</span> Stop
-          </button>
-        ) : (
-          <button className="btn btn-green btn-sm flex-1 justify-center" onClick={() => onStart(ch.channelId)}>
-            ▶ Start
-          </button>
-        )}
-        <button className="btn btn-ghost btn-xs px-3" onClick={() => onRefresh(ch.channelId)} title="Refresh now">🔄</button>
+      <div style={{display:'flex', gap:7, marginBottom:12}}>
+        {ch.capturing
+          ? <button className="btn btn-ghost btn-sm" style={{flex:1, justifyContent:'center'}} onClick={() => onStop(ch.channelId)}>
+              <span style={{color:'var(--red)', fontSize:9}}>■</span> Stop
+            </button>
+          : <button className="btn btn-green btn-sm" style={{flex:1, justifyContent:'center'}} onClick={() => onStart(ch.channelId)}>
+              <span style={{fontSize:9}}>▶</span> Start
+            </button>
+        }
+        <button
+          className="btn btn-ghost btn-xs"
+          style={{padding:'6px 10px'}}
+          onClick={() => onRefresh(ch.channelId)}
+          title="Refresh now"
+        >↺</button>
       </div>
 
-      {/* Log */}
+      {/* Activity log */}
       <div className="log-box">
-        {logLines.length === 0
-          ? <span style={{color:'#1e3a5f'}}>No log entries yet</span>
-          : logLines.map((l, i) => {
-              const cls = l.includes('✅')||l.includes('viewers written') ? 'log-ok'
-                        : l.includes('❌') ? 'log-err'
-                        : l.includes('⚠') ? 'log-warn'
-                        : 'log-info'
+        {logLines.length===0
+          ? <span style={{color:'var(--text3)'}}>Waiting to capture…</span>
+          : logLines.map((l,i) => {
+              const cls = l.includes('✅')?'log-ok':l.includes('❌')?'log-err':l.includes('⚠')?'log-warn':'log-info'
               return <div key={i} className={cls}>{l}</div>
             })
         }

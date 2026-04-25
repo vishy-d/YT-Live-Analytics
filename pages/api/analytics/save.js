@@ -1,9 +1,9 @@
-import { adminDb, adminAuth } from '../../../lib/firebaseAdmin'
+import { adminAuth } from '../../../lib/firebaseAdmin'
+import db from '../../../lib/db'
 
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).end()
 
-  // Verify Firebase ID token
   const token = req.headers.authorization?.split('Bearer ')[1]
   if (!token) return res.status(401).json({ error: 'Unauthorized' })
 
@@ -16,14 +16,19 @@ export default async function handler(req, res) {
     const date = ts.toISOString().split('T')[0]
     const time = ts.toTimeString().substring(0, 5)
 
-    await adminDb.collection('analytics').add({
-      uid, channelId, channelName, language, colName,
-      viewers: parseInt(viewers) || 0,
-      streams: streams || [],
-      date,
-      time,
-      timestamp: ts.toISOString(),
-      createdAt: new Date(),
+    await db.analyticsRecord.create({
+      data: {
+        uid,
+        channelId,
+        channelName,
+        language,
+        colName,
+        viewers: parseInt(viewers) || 0,
+        streams: JSON.stringify(streams || []),
+        date,
+        time,
+        timestamp: ts
+      }
     })
 
     res.json({ ok: true })

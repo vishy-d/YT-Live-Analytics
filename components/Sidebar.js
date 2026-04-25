@@ -4,13 +4,13 @@ import { signOut } from 'firebase/auth'
 import { useRouter } from 'next/router'
 
 const VIEWS = [
-  { id: 'config',   icon: '⚙', label: 'Config',       section: 'SETUP' },
-  { id: 'channels', icon: '📡', label: 'Channels',     section: null },
-  { id: 'live',     icon: '🔴', label: 'Current LIVE', section: 'ANALYTICS' },
-  { id: 'dash',     icon: '📊', label: 'Dashboard',    section: null },
+  { id:'config',   label:'Configuration', section:'SETUP',     emoji:'⚙' },
+  { id:'channels', label:'Channels',      section:null,        emoji:'📡' },
+  { id:'live',     label:'Current LIVE',   section:'ANALYTICS', emoji:'●' },
+  { id:'dash',     label:'Dashboard',      section:null,        emoji:'▦' },
 ]
 
-export default function Sidebar({ activeView, setView, channels, capturing }) {
+export default function Sidebar({ activeView, setView, channels }) {
   const router = useRouter()
   const [loggingOut, setLoggingOut] = useState(false)
 
@@ -20,51 +20,90 @@ export default function Sidebar({ activeView, setView, channels, capturing }) {
     router.push('/login')
   }
 
-  const totalViewers = channels.reduce((s,c) => s+(c.viewers||0), 0)
-
   return (
-    <aside className="flex flex-col flex-shrink-0" style={{width:220,background:'#060f21',borderRight:'1px solid rgba(0,212,255,0.07)'}}>
-
+    <aside style={{
+      width:232, flexShrink:0,
+      background:'var(--bg2)',
+      borderRight:'1px solid var(--border)',
+      display:'flex', flexDirection:'column',
+      transition:'background .4s ease',
+    }}>
       {/* Logo */}
-      <div className="px-5 py-5 flex items-center gap-3" style={{borderBottom:'1px solid rgba(0,212,255,0.07)'}}>
-        <div className="flex items-center justify-center w-8 h-8 rounded-lg flex-shrink-0"
-             style={{background:'rgba(255,45,85,0.15)',border:'1px solid rgba(255,45,85,0.3)'}}>
-          <span style={{fontSize:14,color:'#ff2d55'}}>▶</span>
+      <div style={{
+        padding:'18px 20px',
+        borderBottom:'1px solid var(--border)',
+        display:'flex', alignItems:'center', gap:14,
+      }}>
+        <div style={{
+          width:38, height:38, borderRadius:10,
+          background:'var(--gradient-danger)',
+          display:'flex', alignItems:'center', justifyContent:'center',
+          flexShrink:0,
+          boxShadow:'0 4px 16px rgba(248,113,113,.25)',
+          animation:'iconPulse 2.8s ease-in-out infinite',
+        }}>
+          <span style={{fontSize:16, color:'#fff', fontWeight:700}}>▶</span>
         </div>
         <div>
-          <div className="font-display font-bold text-sm text-white leading-tight">YT Analytics</div>
-          <div className="font-mono text-xs" style={{color:'#1e3a5f',fontSize:9,letterSpacing:'0.1em'}}>COMMAND CENTER</div>
+          <div style={{
+            fontFamily:"'Inter',sans-serif",
+            fontWeight:800, fontSize:15,
+            color:'var(--text1)', lineHeight:1.2,
+            letterSpacing:'-0.02em',
+          }}>YouTube Analytics</div>
+          <div style={{
+            fontFamily:"'JetBrains Mono',monospace",
+            fontSize:9, color:'var(--text3)',
+            letterSpacing:'0.14em', marginTop:2,
+          }}>LIVE MONITORING</div>
         </div>
       </div>
 
-      {/* Stats quick-view */}
+      {/* Channel count chip */}
       {channels.length > 0 && (
-        <div className="mx-3 my-3 rounded-xl p-3 space-y-2"
-             style={{background:'rgba(0,212,255,0.04)',border:'1px solid rgba(0,212,255,0.08)'}}>
-          <div className="flex justify-between items-center">
-            <span className="text-xs" style={{color:'#2a4a6a'}}>Total viewers</span>
-            <span className="big-num text-lg neon-cyan">{totalViewers.toLocaleString()}</span>
-          </div>
-          <div className="flex justify-between items-center">
-            <span className="text-xs" style={{color:'#2a4a6a'}}>Capturing</span>
-            <span className="flex items-center gap-1.5">
-              {capturing > 0 && <span className="live-dot" style={{width:6,height:6}}/>}
-              <span className={`font-mono text-xs ${capturing>0?'neon-green':''}`} style={capturing===0?{color:'#2a4a6a'}:{}}>{capturing}/{channels.length}</span>
-            </span>
+        <div style={{
+          margin:'12px 14px 0', padding:'10px 14px', borderRadius:8,
+          background:'var(--gradient-glass)', border:'1px solid var(--border)',
+        }}>
+          <div style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+            <span style={{
+              fontSize:11, fontWeight:600, color:'var(--text2)',
+              fontFamily:"'JetBrains Mono',monospace",
+              letterSpacing:'.05em', textTransform:'uppercase',
+            }}>Channels</span>
+            <span style={{
+              fontFamily:"'JetBrains Mono',monospace",
+              fontSize:20, fontWeight:700, color:'var(--blue2)',
+            }}>{channels.length}</span>
           </div>
         </div>
       )}
 
       {/* Nav */}
-      <nav className="flex-1 py-2 overflow-y-auto">
-        {VIEWS.map((v, i) => (
+      <nav style={{flex:1, padding:'10px 10px', overflowY:'auto'}}>
+        {VIEWS.map(v => (
           <div key={v.id}>
-            {v.section && <div className="nav-section">{v.section}</div>}
-            <div className={`nav-item ${activeView===v.id?'active':''}`} onClick={() => setView(v.id)}>
-              <span className="nav-icon text-base">{v.icon}</span>
+            {v.section && (
+              <div style={{
+                padding:'14px 10px 6px',
+                fontFamily:"'JetBrains Mono',monospace",
+                fontSize:9, fontWeight:600,
+                letterSpacing:'0.16em', color:'var(--text4)',
+                textTransform:'uppercase',
+              }}>{v.section}</div>
+            )}
+            <div
+              className={`nav-item ${activeView===v.id?'active':''}`}
+              onClick={() => setView(v.id)}
+            >
+              <span style={{
+                fontSize: v.id==='live' ? 9 : 14,
+                color: activeView===v.id ? 'var(--blue2)' : 'var(--text4)',
+                width:20, textAlign:'center', flexShrink:0,
+              }}>{v.emoji}</span>
               <span>{v.label}</span>
-              {v.id==='live' && capturing>0 && (
-                <span className="ml-auto live-dot" style={{width:6,height:6}}/>
+              {v.id==='live' && (
+                <span className="live-dot" style={{marginLeft:'auto', width:6, height:6}}/>
               )}
             </div>
           </div>
@@ -72,11 +111,21 @@ export default function Sidebar({ activeView, setView, channels, capturing }) {
       </nav>
 
       {/* Footer */}
-      <div className="p-3 space-y-2" style={{borderTop:'1px solid rgba(0,212,255,0.07)'}}>
-        <button className="btn btn-ghost btn-sm w-full justify-center" onClick={logout} disabled={loggingOut}>
-          {loggingOut ? '…' : '⎋ Sign Out'}
+      <div style={{padding:'12px 12px', borderTop:'1px solid var(--border)'}}>
+        <button
+          className="btn btn-ghost btn-sm"
+          style={{width:'100%', justifyContent:'center', fontSize:12}}
+          onClick={logout}
+          disabled={loggingOut}
+        >
+          {loggingOut ? '…' : '⎋  Sign Out'}
         </button>
-        <p className="text-center font-mono" style={{fontSize:9,color:'#1e3a5f',letterSpacing:'0.08em'}}>VS InfoTech · Chennai</p>
+        <p style={{
+          textAlign:'center',
+          fontFamily:"'JetBrains Mono',monospace",
+          fontSize:9, color:'var(--text4)',
+          letterSpacing:'0.12em', marginTop:10,
+        }}>VS InfoTech · Chennai</p>
       </div>
     </aside>
   )

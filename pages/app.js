@@ -12,92 +12,55 @@ import LiveView      from '../components/views/LiveView'
 export default function App() {
   const router = useRouter()
   const { user, loading: authLoading, getToken } = useAuth()
-  const { channels, addChannel, removeChannel }  = useChannels(user?.uid)
-  const { config, addApiKey, removeApiKey, saveConfig } = useConfig(user?.uid)
+  const { channels, addChannel, removeChannel, updateChannel }  = useChannels(user?.uid)
+  const { config, addApiKey, removeApiKey, updateCaptureInterval, updateGlobalSchedule } = useConfig(user?.uid)
+  const [activeView, setActiveView] = useState('config')
+  const [theme,      setTheme]      = useState('dark')
 
-  const [activeView,   setActiveView]   = useState('config')
-  const [capturingSet, setCapturingSet] = useState(new Set())
+  useEffect(() => {
+    if (!user?.uid) return
+    try {
+      const t = localStorage.getItem(`theme:${user.uid}`) || 'dark'
+      setTheme(t)
+      document.documentElement.classList.toggle('light', t === 'light')
+    } catch {}
+  }, [user?.uid])
 
-  // Guard: redirect if not logged in
   useEffect(() => {
     if (!authLoading && !user) router.replace('/login')
   }, [user, authLoading, router])
 
+  function toggleTheme() {
+    const next = theme === 'dark' ? 'light' : 'dark'
+    setTheme(next)
+    document.documentElement.classList.toggle('light', next === 'light')
+    try { localStorage.setItem(`theme:${user.uid}`, next) } catch {}
+  }
+
   if (authLoading || !user) {
     return (
-      <div className="min-h-screen bg-bg flex items-center justify-center">
-        <div className="flex items-center gap-3">
+      <div style={{height:'100vh',background:'var(--bg)',display:'flex',alignItems:'center',justifyContent:'center'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
           <span className="live-dot live-dot-cyan"/>
-          <span className="font-mono text-sm" style={{color:'#2a4a6a'}}>Loading session…</span>
+          <span className="font-mono text-sm" style={{color:'var(--text3)'}}>Loading…</span>
         </div>
       </div>
     )
   }
 
-  const capCount = capturingSet.size
-
   return (
-    <div className="flex flex-col h-screen bg-mesh bg-grid-pattern overflow-hidden">
-
-      {/* Ambient scanline overlay */}
-      <div className="fixed inset-0 pointer-events-none z-0">
-        <div className="scan-line" style={{opacity:.06,animationDuration:'8s'}}/>
-        {/* Corner accents */}
-        <div className="absolute top-0 left-0 w-32 h-32"
-             style={{background:'radial-gradient(ellipse at top left, rgba(255,45,85,0.06) 0%, transparent 60%)'}}/>
-        <div className="absolute bottom-0 right-0 w-64 h-64"
-             style={{background:'radial-gradient(ellipse at bottom right, rgba(0,212,255,0.05) 0%, transparent 60%)'}}/>
+    <div style={{height:'100vh',overflow:'hidden',display:'flex',flexDirection:'column',background:'var(--bg)',transition:'background .4s'}}>
+      <div className="bg-grid"/>
+      <div style={{position:'relative',zIndex:10,flexShrink:0}}>
+        <Header user={user} channels={channels} config={config} theme={theme} toggleTheme={toggleTheme}/>
       </div>
-
-      {/* Header */}
-      <div className="relative z-10">
-        <Header user={user} channels={channels} config={config}/>
-      </div>
-
-      <div className="flex flex-1 overflow-hidden relative z-10">
-        {/* Sidebar */}
-        <Sidebar
-          activeView={activeView}
-          setView={setActiveView}
-          channels={channels}
-          capturing={capCount}
-        />
-
-        {/* Main scrollable content */}
-        <main className="flex-1 overflow-y-auto p-6 space-y-2">
-          {activeView === 'config' && (
-            <ConfigView
-              config={config}
-              addApiKey={addApiKey}
-              removeApiKey={removeApiKey}
-              saveConfig={saveConfig}
-            />
-          )}
-
-          {activeView === 'channels' && (
-            <ChannelsView
-              channels={channels}
-              config={config}
-              addChannel={addChannel}
-              removeChannel={removeChannel}
-              user={user}
-              getToken={getToken}
-            />
-          )}
-
-          {activeView === 'dash' && (
-            <DashboardView
-              channels={channels}
-              getToken={getToken}
-            />
-          )}
-
-          {activeView === 'live' && (
-            <LiveView
-              channels={channels}
-              config={config}
-            />
-          )}
+      <div style={{display:'flex',flex:1,overflow:'hidden',position:'relative',zIndex:10}}>
+        <Sidebar activeView={activeView} setView={setActiveView} channels={channels}/>
+        <main style={{flex:1,overflowY:'auto',padding:20}}>
+          {activeView === 'config'   && <ConfigView   config={config} addApiKey={addApiKey} removeApiKey={removeApiKey} user={user} updateCaptureInterval={updateCaptureInterval}/>}
+          {activeView === 'channels' && <ChannelsView channels={channels} config={config} updateGlobalSchedule={updateGlobalSchedule} addChannel={addChannel} removeChannel={removeChannel} updateChannel={updateChannel} user={user} getToken={getToken}/>}
+          {activeView === 'dash'     && <DashboardView channels={channels} getToken={getToken}/>}
+          {activeView === 'live'     && <LiveView      channels={channels} config={config} getToken={getToken}/>}
         </main>
       </div>
     </div>

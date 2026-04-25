@@ -1,290 +1,407 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
-import ChannelCard from '../ChannelCard'
 import AddChannelModal from '../AddChannelModal'
 
-const DISCOVERY_TTL  = 10 * 60 * 1000  // 10 min
-const CAPTURE_MS     = 60 * 1000        // 60 sec
+const fmtN = n => Number(n || 0).toLocaleString('en-IN')
 
-export default function ChannelsView({ channels, config, addChannel, removeChannel, user, getToken }) {
-  const [showModal,  setShowModal]  = useState(false)
+// Removed ScheduleModal in favor of global schedule
+
+export default function ChannelsView({ channels, config, updateGlobalSchedule, addChannel, removeChannel, updateChannel, user, getToken }) {
+  const uid = user?.uid
+
+  const globalSchedule = config?.globalSchedule || { enabled: false, startHour: 9, endHour: 23 }
+
+  const [showModal, setShowModal] = useState(false)
   const [langFilter, setLangFilter] = useState('ALL')
-  const [liveData,   setLiveData]   = useState({})   // channelId -> {viewers, streams, log, capturing, discCache, discTime}
-  const captureRefs = useRef({})  // channelId -> {timeout, interval}
+  const [captureData, setCaptureData] = useState({})  // channelId -> { capturing, viewers, streams, logs }
+  const [selected, setSelected] = useState(new Set())
+  const [expandedLogs, setExpandedLogs] = useState({})
+  const [engineRunning, setEngineRunning] = useState(false)
 
-  const apiKeys  = config?.apiKeys || []
-  const apiIndex = useRef(0)
+  const pollRef = useRef(null)
 
-  function getKey() {
-    if (!apiKeys.length) throw new Error('No API keys configured')
-    const k = apiKeys[apiIndex.current % apiKeys.length]
-    apiIndex.current = (apiIndex.current + 1) % apiKeys.length
-    return k
-  }
-
-  // Init liveData for any new channels
+  // Poll server-side capture status every 5 seconds
   useEffect(() => {
-    setLiveData(prev => {
-      const next = { ...prev }
-      channels.forEach(ch => {
-        if (!next[ch.channelId]) {
-          next[ch.channelId] = { viewers:0, streams:[], log:[], capturing:false, discCache:[], discTime:0 }
-        }
-      })
-      // Remove deleted channels
-      Object.keys(next).forEach(id => {
-        if (!channels.find(c => c.channelId===id)) delete next[id]
-      })
-      return next
-    })
-  }, [channels])
-
-  const addLog = useCallback((channelId, msg) => {
-    setLiveData(prev => {
-      const d = prev[channelId] || { viewers:0, streams:[], log:[], capturing:false, discCache:[], discTime:0 }
-      const log = [`[${new Date().toLocaleTimeString()}] ${msg}`, ...d.log].slice(0, 30)
-      return { ...prev, [channelId]: { ...d, log } }
-    })
-  }, [])
-
-  async function fetchLiveData(channelId, skipDiscovery = false) {
-    const ch = channels.find(c => c.channelId === channelId)
-    if (!ch) return
-    const d = liveData[channelId] || { discCache:[], discTime:0 }
-    const now = Date.now()
-    const doDiscovery = !skipDiscovery || !d.discCache?.length || now - d.discTime > DISCOVERY_TTL
-
-    try {
-      const apiKey = getKey()
-      const res = await fetch('/api/youtube/live', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          channelId,
-          apiKey,
-          skipDiscovery: !doDiscovery,
-          cachedIds: d.discCache?.map(s => s.id) || [],
-        }),
-      })
-      const data = await res.json()
-      if (data.error) throw new Error(data.error)
-
-      setLiveData(prev => {
-        const existing = prev[channelId] || {}
-        return {
-          ...prev,
-          [channelId]: {
-            ...existing,
-            viewers:  data.total,
-            streams:  data.streams,
-            discCache: data.streams,
-            discTime:  doDiscovery ? now : existing.discTime,
-          }
-        }
-      })
-
-      return data
-    } catch (e) {
-      addLog(channelId, `❌ ${e.message}`)
-      throw e
-    }
-  }
-
-  async function captureOnce(channelId) {
-    const ch = channels.find(c => c.channelId === channelId)
-    if (!ch) return
-
-    try {
-      const data = await fetchLiveData(channelId, true)
-      if (!data) return
-
-      if (!data.streams.length) {
-        addLog(channelId, '⚠ No live streams right now')
-        return
-      }
-
-      // Save to Firestore via API route
-      const token = await getToken()
-      if (token) {
-        await fetch('/api/analytics/save', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-          body: JSON.stringify({
-            channelId: ch.channelId,
-            channelName: ch.channelName,
-            language: ch.language,
-            colName: ch.colName,
-            viewers: data.total,
-            streams: data.streams,
-            timestamp: new Date().toISOString(),
-          }),
+    async function fetchStatus() {
+      try {
+        const token = await getToken()
+        if (!token) return
+        const res = await fetch('/api/capture/status', {
+          headers: { Authorization: `Bearer ${token}` },
         })
+        const data = await res.json()
+        if (data.channels) {
+          setCaptureData(data.channels)
+        }
+        setEngineRunning(data.engineRunning || false)
+      } catch (e) {
+        console.error('Status poll error:', e)
       }
+    }
 
-      addLog(channelId, `✅ ${data.total.toLocaleString()} viewers saved`)
+    fetchStatus()
+    pollRef.current = setInterval(fetchStatus, 5000)
+    return () => { if (pollRef.current) clearInterval(pollRef.current) }
+  }, [getToken])
+
+  // Removed localStorage globalSchedule code here
+
+  async function startCapture(channelId) {
+    try {
+      const token = await getToken()
+      await fetch('/api/capture/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channelId }),
+      })
+      // Optimistic update
+      setCaptureData(prev => ({
+        ...prev,
+        [channelId]: { ...(prev[channelId] || {}), capturing: true },
+      }))
     } catch (e) {
-      addLog(channelId, `❌ ${e.message}`)
+      console.error('Start capture error:', e)
     }
   }
 
-  function startCapture(channelId) {
-    if (captureRefs.current[channelId]) return
-
-    setLiveData(prev => ({
-      ...prev,
-      [channelId]: { ...(prev[channelId]||{}), capturing: true }
-    }))
-
-    const now = Date.now()
-    const msToNext = CAPTURE_MS - (now % CAPTURE_MS)
-    addLog(channelId, `⏳ Starting in ${Math.round(msToNext/1000)}s`)
-
-    const timeout = setTimeout(() => {
-      captureOnce(channelId)
-      const interval = setInterval(() => captureOnce(channelId), CAPTURE_MS)
-      captureRefs.current[channelId] = { interval }
-    }, msToNext)
-
-    captureRefs.current[channelId] = { timeout }
-  }
-
-  function stopCapture(channelId) {
-    const refs = captureRefs.current[channelId]
-    if (refs) {
-      clearTimeout(refs.timeout)
-      clearInterval(refs.interval)
-      delete captureRefs.current[channelId]
+  async function stopCapture(channelId) {
+    try {
+      const token = await getToken()
+      await fetch('/api/capture/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channelId }),
+      })
+      setCaptureData(prev => ({
+        ...prev,
+        [channelId]: { ...(prev[channelId] || {}), capturing: false },
+      }))
+    } catch (e) {
+      console.error('Stop capture error:', e)
     }
-    setLiveData(prev => ({
-      ...prev,
-      [channelId]: { ...(prev[channelId]||{}), capturing: false }
-    }))
-    addLog(channelId, '■ Capture stopped')
   }
 
-  async function refreshChannel(channelId) {
-    addLog(channelId, '🔄 Refreshing…')
-    try { await fetchLiveData(channelId, false) }
-    catch (_) {}
+  async function startAll() {
+    try {
+      const token = await getToken()
+      const ids = visible.map(ch => ch.channelId)
+      await fetch('/api/capture/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channelIds: ids }),
+      })
+      setCaptureData(prev => {
+        const next = { ...prev }
+        ids.forEach(id => { next[id] = { ...(next[id] || {}), capturing: true } })
+        return next
+      })
+    } catch (e) {
+      console.error('Start all error:', e)
+    }
   }
 
-  function startAll() {
-    const visible = langFilter==='ALL' ? channels : channels.filter(c=>c.language===langFilter)
-    visible.forEach(ch => { if (!liveData[ch.channelId]?.capturing) startCapture(ch.channelId) })
-  }
-  function stopAll() {
-    const visible = langFilter==='ALL' ? channels : channels.filter(c=>c.language===langFilter)
-    visible.forEach(ch => { if (liveData[ch.channelId]?.capturing) stopCapture(ch.channelId) })
+  async function stopAll() {
+    try {
+      const token = await getToken()
+      await fetch('/api/capture/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ all: true }),
+      })
+      setCaptureData(prev => {
+        const next = { ...prev }
+        Object.keys(next).forEach(id => { next[id] = { ...next[id], capturing: false } })
+        return next
+      })
+    } catch (e) {
+      console.error('Stop all error:', e)
+    }
   }
 
-  const langs    = [...new Set(channels.map(c => c.language).filter(Boolean))]
-  const visible  = langFilter==='ALL' ? channels : channels.filter(c=>c.language===langFilter)
-  const capCount = Object.values(liveData).filter(d=>d.capturing).length
-  const totalV   = Object.values(liveData).reduce((s,d)=>s+(d.viewers||0),0)
-  const liveStr  = Object.values(liveData).reduce((s,d)=>s+(d.streams?.length||0),0)
-
-  function fmtNum(n) {
-    if (n>=1e6) return (n/1e6).toFixed(1)+'M'
-    if (n>=1e3) return (n/1e3).toFixed(0)+'K'
-    return n.toLocaleString()
+  async function startSelected() {
+    try {
+      const token = await getToken()
+      const ids = [...selected].filter(id => !captureData[id]?.capturing)
+      if (!ids.length) return
+      await fetch('/api/capture/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channelIds: ids }),
+      })
+      setCaptureData(prev => {
+        const next = { ...prev }
+        ids.forEach(id => { next[id] = { ...(next[id] || {}), capturing: true } })
+        return next
+      })
+    } catch (e) {
+      console.error('Start selected error:', e)
+    }
   }
+
+  async function stopSelected() {
+    try {
+      const token = await getToken()
+      const ids = [...selected].filter(id => captureData[id]?.capturing)
+      if (!ids.length) return
+      await fetch('/api/capture/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ channelIds: ids }),
+      })
+      setCaptureData(prev => {
+        const next = { ...prev }
+        ids.forEach(id => { next[id] = { ...next[id], capturing: false } })
+        return next
+      })
+    } catch (e) {
+      console.error('Stop selected error:', e)
+    }
+  }
+
+  const langs = [...new Set(channels.map(c => c.language).filter(Boolean))]
+  let visible = channels
+  if (langFilter !== 'ALL') visible = visible.filter(c => c.language === langFilter)
+
+  const currentHour = new Date().getHours()
+  const isWithinSchedule = !globalSchedule.enabled ||
+    (globalSchedule.startHour < globalSchedule.endHour
+      ? currentHour >= globalSchedule.startHour && currentHour < globalSchedule.endHour
+      : globalSchedule.startHour > globalSchedule.endHour
+        ? currentHour >= globalSchedule.startHour || currentHour < globalSchedule.endHour
+        : true)
+
+  const capCount = visible.filter(ch => {
+    const cap = captureData[ch.channelId]?.capturing || false;
+    const chUseSchedule = ch.useGlobalSchedule ?? true;
+    const scheduledButPaused = cap && globalSchedule.enabled && chUseSchedule && !isWithinSchedule;
+    return cap && !scheduledButPaused;
+  }).length
+  const allChecked = visible.length > 0 && visible.every(ch => selected.has(ch.channelId))
+
+  function toggleAll() {
+    if (allChecked) setSelected(new Set())
+    else setSelected(new Set(visible.map(c => c.channelId)))
+  }
+  function toggleOne(cid) {
+    const next = new Set(selected)
+    next.has(cid) ? next.delete(cid) : next.add(cid)
+    setSelected(next)
+  }
+
+  const MONO = { fontFamily: "'JetBrains Mono',monospace" }
+  const LABEL = { fontFamily: "'JetBrains Mono',monospace", fontSize: 9, fontWeight: 700, letterSpacing: '.10em', textTransform: 'uppercase', color: 'var(--text3)' }
 
   return (
-    <div className="animate-slide-up space-y-5">
+    <div className="animate-slide-up" style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
 
-      {/* Header */}
-      <div className="flex items-start justify-between flex-wrap gap-3">
-        <div>
-          <div className="flex items-center gap-3 mb-1">
-            <span style={{color:'#ff2d55',fontSize:22}}>📡</span>
-            <h2 className="font-display text-2xl font-bold text-white">Channel List</h2>
-            {capCount > 0 && (
-              <span className="flex items-center gap-1.5 badge badge-green">
-                <span className="live-dot" style={{width:6,height:6}}/>
-                {capCount} LIVE
-              </span>
-            )}
-          </div>
-          <p style={{color:'#2a4a6a',fontSize:13}}>Monitor, start/stop captures, view real-time counts</p>
+      {/* Page header */}
+      <div style={{ borderBottom: '1px solid var(--border)', paddingBottom: 18 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <span style={{ ...MONO, fontSize: 9, fontWeight: 700, letterSpacing: '.12em', textTransform: 'uppercase', color: 'var(--text4)' }}>SETUP</span>
+          <span style={{ color: 'var(--border2)', fontSize: 12 }}>›</span>
+          <span style={{ ...MONO, fontSize: 9, fontWeight: 700, letterSpacing: '.08em', textTransform: 'uppercase', color: 'var(--blue2)' }}>CHANNELS</span>
         </div>
-        <button className="btn btn-red" onClick={() => setShowModal(true)}>
-          ＋ Add Channel
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+              <h2 style={{ fontWeight: 800, fontSize: 26, color: 'var(--text1)', margin: 0, letterSpacing: '-0.025em' }}>
+                Channels
+              </h2>
+              {capCount > 0 && <span className="badge badge-green" style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11 }}><span className="live-dot" style={{ width: 5, height: 5 }} />{capCount} capturing</span>}
+              {engineRunning && <span className="badge badge-blue" style={{ fontSize: 10 }}>⚙ Server Engine</span>}
+            </div>
+          </div>
+          <button className="btn btn-blue" style={{ fontWeight: 700 }} onClick={() => setShowModal(true)}>+ Add Channel</button>
+        </div>
       </div>
 
       {/* Stats strip */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
         {[
-          { label:'Channels',  val:channels.length,   color:'#00d4ff' },
-          { label:'Live Streams', val:liveStr,         color:'#ff2d55' },
-          { label:'Total Viewers', val:fmtNum(totalV), color:'#10ff9a' },
-          { label:'Capturing', val:`${capCount}/${channels.length}`, color:'#ffb700' },
-        ].map(s => (
-          <div key={s.label} className="glass p-4 stat-card rounded-2xl" style={{'--accent':s.color}}>
-            <div className="big-num text-3xl" style={{color:s.color}}>{s.val}</div>
-            <div className="text-xs mt-1" style={{color:'#2a4a6a',textTransform:'uppercase',letterSpacing:'0.06em'}}>{s.label}</div>
+          { label: 'Total Channels', val: channels.length, color: 'var(--blue2)' },
+          { label: 'Capturing Now', val: `${capCount} / ${channels.length}`, color: 'var(--green)' },
+          { label: 'Languages', val: langs.length, color: 'var(--text1)' },
+        ].map((s, i) => (
+          <div key={s.label} style={{ padding: '16px 22px', borderRight: i < 2 ? '1px solid var(--border)' : 'none' }}>
+            <div style={{ ...LABEL, marginBottom: 6 }}>{s.label}</div>
+            <div style={{ ...MONO, fontSize: 28, fontWeight: 700, color: s.color, lineHeight: 1, letterSpacing: '-0.03em' }}>{s.val}</div>
           </div>
         ))}
       </div>
 
+      {/* Global Scheduler */}
+      <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, padding: '16px 22px', display: 'flex', gap: 24, alignItems: 'center', flexWrap: 'wrap' }}>
+        <div>
+          <div style={{ ...LABEL, marginBottom: 6 }}>GLOBAL SCHEDULER</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <button onClick={() => updateGlobalSchedule({ ...globalSchedule, enabled: !globalSchedule.enabled })} style={{
+              width: 40, height: 22, borderRadius: 12, border: 'none', cursor: 'pointer',
+              background: globalSchedule.enabled ? 'var(--green)' : 'var(--bg4)',
+              position: 'relative', transition: 'background .25s', flexShrink: 0,
+            }}>
+              <span style={{ position: 'absolute', top: 2, left: globalSchedule.enabled ? 20 : 2, width: 18, height: 18, borderRadius: '50%', background: '#fff', transition: 'left .25s', boxShadow: '0 2px 4px rgba(0,0,0,.3)' }} />
+            </button>
+            <span style={{ fontSize: 13, fontWeight: 600, color: 'var(--text2)' }}>{globalSchedule.enabled ? 'Enabled' : 'Disabled'}</span>
+          </div>
+        </div>
+
+        {globalSchedule.enabled && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>Start:</span>
+              <select className="select-cyber" style={{ padding: '4px 8px', fontSize: 12, minWidth: 70 }} value={globalSchedule.startHour} onChange={e => updateGlobalSchedule({ ...globalSchedule, startHour: +e.target.value })}>
+                {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{`${String(i).padStart(2, '0')}:00`}</option>)}
+              </select>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 13, color: 'var(--text3)', fontWeight: 600 }}>End:</span>
+              <select className="select-cyber" style={{ padding: '4px 8px', fontSize: 12, minWidth: 70 }} value={globalSchedule.endHour} onChange={e => updateGlobalSchedule({ ...globalSchedule, endHour: +e.target.value })}>
+                {Array.from({ length: 24 }, (_, i) => <option key={i} value={i}>{`${String(i).padStart(2, '0')}:00`}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
+
       {/* Toolbar */}
       {channels.length > 0 && (
-        <div className="flex flex-wrap gap-2 items-center">
-          <button className="btn btn-green btn-sm" onClick={startAll}>▶ Start {langFilter!=='ALL'?langFilter:'All'}</button>
-          <button className="btn btn-ghost btn-sm" onClick={stopAll}>■ Stop {langFilter!=='ALL'?langFilter:'All'}</button>
-          <div className="flex-1"/>
-          {/* Language filter pills */}
-          {langs.length > 1 && (
-            <div className="flex gap-1.5 flex-wrap">
-              {['ALL',...langs].map(l => (
-                <button key={l} onClick={() => setLangFilter(l)}
-                        className="btn btn-xs rounded-lg"
-                        style={langFilter===l
-                          ? {background:'rgba(0,212,255,0.15)',border:'1px solid rgba(0,212,255,0.4)',color:'#00d4ff'}
-                          : {background:'rgba(0,212,255,0.04)',border:'1px solid rgba(0,212,255,0.08)',color:'#4a6080'}}>
-                  {l === 'ALL' ? '🌐 All' : l}
-                </button>
-              ))}
-            </div>
-          )}
+        <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, padding: '12px 18px', display: 'flex', flexWrap: 'wrap', gap: 14, alignItems: 'center' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, alignItems: 'center' }}>
+            <span style={{ ...LABEL, color: 'var(--text4)' }}>LANG</span>
+            {['ALL', ...langs].map(l => (
+              <button key={l} onClick={() => setLangFilter(l)} className="btn btn-xs"
+                style={langFilter === l ? { background: 'rgba(99,102,241,.12)', border: '1px solid rgba(99,102,241,.3)', color: 'var(--blue2)', fontWeight: 700 } : { background: 'transparent', border: '1px solid var(--border)', color: 'var(--text3)' }}>
+                {l === 'ALL' ? 'All' : l}
+              </button>
+            ))}
+          </div>
+          <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
+            {selected.size > 0 && (
+              <>
+                <span style={{ ...MONO, fontSize: 11, color: 'var(--text3)' }}>{selected.size} selected</span>
+                <button className="btn btn-green btn-xs" onClick={startSelected}>▶ Start</button>
+                <button className="btn btn-ghost btn-xs" onClick={stopSelected}>■ Stop</button>
+                <div style={{ width: 1, height: 20, background: 'var(--border)' }} />
+              </>
+            )}
+            <button className="btn btn-green btn-xs" onClick={startAll}>▶ All</button>
+            <button className="btn btn-ghost btn-xs" onClick={stopAll}>■ All</button>
+          </div>
         </div>
       )}
 
-      {/* Cards grid */}
+      {/* Empty state */}
       {visible.length === 0 ? (
-        <div className="glass rounded-2xl p-12 text-center"
-             style={{border:'1px dashed rgba(0,212,255,0.1)'}}>
-          <div style={{fontSize:48,marginBottom:12}}>📡</div>
-          <h3 className="font-display text-lg font-semibold text-white mb-2">No channels yet</h3>
-          <p style={{color:'#2a4a6a',fontSize:13,marginBottom:20}}>
-            Add your first YouTube channel to start monitoring live viewer counts.
-          </p>
-          <button className="btn btn-red" onClick={() => setShowModal(true)}>＋ Add First Channel</button>
+        <div style={{ background: 'var(--bg2)', border: '1px dashed var(--border2)', borderRadius: 12, padding: '56px', textAlign: 'center' }}>
+          <div style={{ fontSize: 36, marginBottom: 12, opacity: .2 }}>📡</div>
+          <h3 style={{ fontWeight: 700, fontSize: 17, color: 'var(--text2)', marginBottom: 8 }}>No channels yet</h3>
+          <p style={{ color: 'var(--text3)', fontSize: 13, marginBottom: 22 }}>Add your first YouTube channel to start monitoring.</p>
+          <button className="btn btn-blue" onClick={() => setShowModal(true)}>+ Add First Channel</button>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-4">
+        /* LIST VIEW */
+        <div style={{ background: 'var(--bg2)', border: '1px solid var(--border)', borderRadius: 12, overflow: 'hidden' }}>
+          {/* List header */}
+          <div style={{ display: 'grid', gridTemplateColumns: '36px 36px 1fr 120px 90px 100px 90px 100px', padding: '10px 18px', background: 'var(--bg3)', borderBottom: '1px solid var(--border)', alignItems: 'center' }}>
+            <div>
+              <input type="checkbox" checked={allChecked} onChange={toggleAll} style={{ cursor: 'pointer' }} />
+            </div>
+            <div />
+            <div style={{ ...LABEL }}>Channel</div>
+            <div style={{ ...LABEL }}>Viewers</div>
+            <div style={{ ...LABEL }}>Streams</div>
+            <div style={{ ...LABEL }}>Status</div>
+            <div style={{ ...LABEL, textAlign: 'center' }}>Recurring</div>
+            <div style={{ ...LABEL, textAlign: 'right' }}>Actions</div>
+          </div>
+
           {visible.map((ch, i) => {
-            const d = liveData[ch.channelId] || {}
+            const d = captureData[ch.channelId] || {}
+            const viewers = d.viewers || 0
+            const streams = d.streams || []
+            const logs = d.logs || []
+            const cap = d.capturing || false
+            const isLogExp = expandedLogs[ch.channelId]
+            const isSel = selected.has(ch.channelId)
+
+            const chUseSchedule = ch.useGlobalSchedule ?? true
+            const scheduledButPaused = cap && globalSchedule.enabled && chUseSchedule && !isWithinSchedule
+
+
             return (
-              <ChannelCard
-                key={ch.firestoreId || ch.channelId}
-                index={i}
-                ch={{ ...ch, ...d }}
-                onStart={startCapture}
-                onStop={stopCapture}
-                onRemove={removeChannel}
-                onRefresh={refreshChannel}
-              />
+              <div key={ch.id || ch.channelId} className="animate-slide-up" style={{ animationDelay: `${i * 25}ms`, borderBottom: i < visible.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '36px 36px 1fr 120px 90px 100px 90px 100px', padding: '13px 18px', alignItems: 'center', transition: 'background .15s', cursor: 'default' }}
+                  onMouseEnter={e => e.currentTarget.style.background = 'var(--bg3)'}
+                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+
+                  <div><input type="checkbox" checked={isSel} onChange={() => toggleOne(ch.channelId)} style={{ cursor: 'pointer' }} /></div>
+
+                  <div>{cap && !scheduledButPaused && streams.length > 0 ? <div className="live-ring"><span className="live-dot" style={{ width: 7, height: 7 }} /></div> : <span style={{ width: 7, height: 7, borderRadius: '50%', background: 'var(--bg4)', display: 'inline-block' }} />}</div>
+
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                      <span style={{ fontWeight: 600, fontSize: 14, color: 'var(--text1)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ch.channelName}</span>
+                      <span className="badge badge-violet" style={{ fontSize: 9, flexShrink: 0 }}>{ch.language}</span>
+                      <span className="badge badge-blue" style={{ fontSize: 9, flexShrink: 0 }}>{ch.colName}</span>
+                    </div>
+                    <div style={{ ...MONO, fontSize: 10, color: 'var(--text4)' }}>{ch.channelId}</div>
+                  </div>
+
+                  <div>
+                    <div style={{ ...MONO, fontSize: 22, fontWeight: 700, color: cap && viewers > 0 ? 'var(--blue2)' : viewers > 0 ? 'var(--text2)' : 'var(--text4)', lineHeight: 1, letterSpacing: '-0.03em' }}>{fmtN(viewers)}</div>
+                    <div style={{ ...MONO, fontSize: 10, color: 'var(--text4)', marginTop: 3 }}>{streams.length} stream{streams.length !== 1 ? 's' : ''}</div>
+                  </div>
+
+                  <div style={{ ...MONO, fontSize: 12, fontWeight: 600, color: streams.length > 0 ? 'var(--green)' : 'var(--text4)' }}>{streams.length} live</div>
+
+                  <div>
+                    {scheduledButPaused
+                      ? <span style={{ ...MONO, fontSize: 10, fontWeight: 700, color: 'var(--amber)', display: 'flex', alignItems: 'center', gap: 5 }}>⏸ Idle (Scheduled)</span>
+                      : cap
+                        ? <span style={{ ...MONO, fontSize: 10, fontWeight: 700, color: 'var(--green)', display: 'flex', alignItems: 'center', gap: 5 }}><span style={{ width: 6, height: 6, borderRadius: '50%', background: 'var(--green)', display: 'inline-block' }} /> Capturing</span>
+                        : <span style={{ ...MONO, fontSize: 10, color: 'var(--text4)' }}>Idle</span>}
+                  </div>
+
+                  <div style={{ textAlign: 'center' }}>
+                    <input type="checkbox" checked={ch.useGlobalSchedule ?? true} onChange={(e) => updateChannel(ch.id, { useGlobalSchedule: e.target.checked })} style={{ cursor: 'pointer' }} title="Use Global Schedule" />
+                  </div>
+
+                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                    {(() => {
+                      const iconBtn = { width: 26, height: 26, padding: 0, justifyContent: 'center' }
+                      return (
+                        <>
+                          {cap
+                            ? <button className="btn btn-ghost btn-xs" title="Stop" onClick={() => stopCapture(ch.channelId)} style={{ ...iconBtn, color: 'var(--text2)', borderColor: 'var(--border)' }}>■</button>
+                            : <button className="btn btn-green btn-xs" title="Start" onClick={() => startCapture(ch.channelId)} style={iconBtn}>▶</button>}
+                          <button className="btn btn-ghost btn-xs" title="Log" onClick={() => setExpandedLogs(p => ({ ...p, [ch.channelId]: !p[ch.channelId] }))} style={{ ...iconBtn, color: 'var(--text3)' }}>{isLogExp ? '▲' : '▼'}</button>
+                          <button className="btn btn-ghost btn-xs" title="Remove" onClick={() => removeChannel(ch.id)} style={{ ...iconBtn, color: 'var(--red)', borderColor: 'var(--border)' }}>✕</button>
+                        </>
+                      )
+                    })()}
+                  </div>
+                </div>
+
+                {/* Log row */}
+                {isLogExp && (
+                  <div className="animate-fade-in" style={{ padding: '10px 18px 12px 90px', borderTop: '1px solid var(--border)', background: 'var(--bg)' }}>
+                    <div className="log-box">
+                      {logs.length === 0
+                        ? <span style={{ color: 'var(--text4)' }}>Waiting to capture…</span>
+                        : logs.map((l, li) => {
+                          const cls = l.includes('✅') ? 'log-ok' : l.includes('❌') ? 'log-err' : l.includes('⚠') ? 'log-warn' : 'log-info'
+                          return <div key={li} className={cls}>{l}</div>
+                        })}
+                    </div>
+                  </div>
+                )}
+              </div>
             )
           })}
         </div>
       )}
 
       {showModal && (
-        <AddChannelModal
-          apiKeys={apiKeys}
-          onAdd={addChannel}
-          onClose={() => setShowModal(false)}
-        />
+        <AddChannelModal apiKeys={config?.apiKeys || []} onAdd={addChannel} onClose={() => setShowModal(false)} />
       )}
     </div>
   )
